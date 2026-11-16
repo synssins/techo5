@@ -38,6 +38,8 @@ type commandRig struct {
 	reaches   bool
 	skipped   int
 	fired     []map[string]string
+	opened    []time.Time
+	cannot    bool
 	wakeWords []string
 	models    []wake.Model
 }
@@ -80,6 +82,8 @@ func (r *commandRig) newWord(k *commandKind) *command {
 		reaches: func() bool { return r.reaches },
 		next:    func() { r.skipped++ },
 		fire:    func(data map[string]string) { r.fired = append(r.fired, data) },
+		canOpen: func() bool { return !r.cannot },
+		open:    func(at time.Time) { r.opened = append(r.opened, at) },
 		now:     func() time.Time { return r.clock },
 		after:   func(d time.Duration, f func()) { r.waits = append(r.waits, d); r.timers = append(r.timers, f) },
 	}
@@ -1236,25 +1240,21 @@ func TestAnOwnCommandWordListensAtAnyTime(t *testing.T) {
 	}
 }
 
-// Heard, a command word of your own fires the event and nothing else, with nothing playing and the
-// speaker muted too: Home Assistant decides what it does. A turn or a ring still has the microphones.
-func TestAnOwnCommandWordOnlyTellsHomeAssistant(t *testing.T) {
+// Heard, a command word of your own opens a turn on the first assistant, as its wake word would, with
+// nothing playing and the speaker muted too, and the turn starts far enough back to send the phrase
+// itself. It fires no event and touches nothing else. A turn or a ring still has the microphones, and a
+// device with no assistant to answer opens nothing.
+func TestAnOwnCommandWordOpensATurn(t *testing.T) {
 	r := newCommandRig(t).as(ownCommand(2))
 	r.models = append(r.models, model("lights", wake.KindMicroWakeWord))
 	r.choose(t, "lights")
 	r.muted = true
 	r.c.heard()
-	if len(r.fired) != 1 {
-		t.Fatalf("fired %v, want one event", r.fired)
+	if len(r.opened) != 1 || !r.opened[0].Equal(r.clock.Add(-ownHistory)) {
+		t.Fatalf("opened %v, want one turn from %v", r.opened, r.clock.Add(-ownHistory))
 	}
-	want := map[string]string{"command": "word", "word": "lights", "score": "0.93"}
-	for k, v := range want {
-		if r.fired[0][k] != v {
-			t.Errorf("event %s = %q, want %q (%v)", k, r.fired[0][k], v, r.fired[0])
-		}
-	}
-	if r.skipped != 0 || len(r.adjusted) != 0 {
-		t.Errorf("skipped %d, adjusted %v: a word of your own only fires the event", r.skipped, r.adjusted)
+	if len(r.fired) != 0 || r.skipped != 0 || len(r.adjusted) != 0 {
+		t.Errorf("fired %v, skipped %d, adjusted %v: a word of your own only opens a turn", r.fired, r.skipped, r.adjusted)
 	}
 	for _, c := range []struct {
 		name string
@@ -1262,20 +1262,21 @@ func TestAnOwnCommandWordOnlyTellsHomeAssistant(t *testing.T) {
 	}{
 		{"a turn", func(r *commandRig) { r.busy = true }},
 		{"a ring", func(r *commandRig) { r.ringing = true }},
+		{"no assistant", func(r *commandRig) { r.cannot = true }},
 	} {
 		r := newCommandRig(t).as(ownCommand(2))
 		r.models = append(r.models, model("lights", wake.KindMicroWakeWord))
 		r.choose(t, "lights")
 		c.set(r)
 		r.c.heard()
-		if len(r.fired) != 0 {
-			t.Errorf("%s: fired %v", c.name, r.fired)
+		if len(r.opened) != 0 || len(r.fired) != 0 {
+			t.Errorf("%s: opened %v, fired %v", c.name, r.opened, r.fired)
 		}
 	}
 }
 
-// Every device that hears a word of your own would fire, and "lights" would toggle twice: only the
-// nearest acts, and every device can (it has nobody to ask, unlike the next song word).
+// Every device that hears a word of your own would open a turn, and "lights" would be asked for twice:
+// only the nearest acts, and a device can claim it when it has an assistant to open the turn on.
 func TestAnOwnCommandWordAsksWhoIsNearest(t *testing.T) {
 	r := newCommandRig(t).as(ownCommand(0))
 	var asked string

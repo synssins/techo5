@@ -51,6 +51,13 @@ const (
 // commandNone is a command word's select switched off.
 const commandNone = "None"
 
+// ownAssistant is the slot a command word of your own opens its turn on: the first assistant's.
+const ownAssistant = 0
+
+// ownHistory is how far before acting a word of your own's turn starts: the whole of the microphone's
+// history, which holds the phrase (detection fires at its end) and what led up to it.
+const ownHistory = mic.Confirming - mic.History
+
 // CommandEvent is what Home Assistant's bus calls a command word acting, so an automation, or a client
 // that is not Home Assistant, can follow what the device did on its own.
 const CommandEvent = "esphome.techo5_command"
@@ -83,8 +90,9 @@ type commandKind struct {
 	// each of them: only the nearest device acts (feature/nearest). The volume words are per device.
 	shared bool
 
-	// own is a command word of your own: it only fires the event, for Home Assistant to act on, and it
-	// listens at any time unless set to listen only while music plays (whilePlaying).
+	// own is a command word of your own: it opens a turn on the first assistant, as its wake word would,
+	// with the phrase at the front of what the turn sends, and it listens at any time unless set to listen
+	// only while music plays (whilePlaying).
 	own        bool
 	setPlaying func(bool) error
 	setAlone   func(bool) error
@@ -122,10 +130,10 @@ var (
 	}
 )
 
-// ownCommand is command word of your own i, from 0: heard, it fires the event with command "word" and
-// does nothing else, so Home Assistant decides what "lights" means in the room it was said in. Every
-// device that hears it would fire, so only the nearest does (shared), the way the next song word skips
-// once.
+// ownCommand is command word of your own i, from 0: heard, it opens a turn on the first assistant the way
+// its wake word does, and the turn sends the phrase itself, so the assistant hears "lights on" and decides
+// what it means in the room it was said in. Every device that hears it would open one, so only the nearest
+// does (shared), the way the next song word skips once.
 func ownCommand(i int) *commandKind {
 	n := strconv.Itoa(i + 1)
 	return &commandKind{
@@ -136,9 +144,6 @@ func ownCommand(i int) *commandKind {
 		setThreshold: func(v float64) error { return config.Set().OwnCommand(i).Threshold(v) },
 		setPlaying:   func(v bool) error { return config.Set().OwnCommand(i).WhilePlaying(v) },
 		setAlone:     func(v bool) error { return config.Set().OwnCommand(i).Alone(v) },
-		act: func(*command) (map[string]string, string) {
-			return map[string]string{"command": "word"}, "telling Home Assistant"
-		},
 		shared: true,
 		own:    true,
 	}
@@ -205,6 +210,8 @@ type command struct {
 	reaches   func() bool
 	next      func()
 	fire      func(data map[string]string)
+	canOpen   func() bool         // whether a turn on the first assistant can open here (voice.CanAnswer)
+	open      func(at time.Time)  // opens one, sending the audio from at (voice.WokeAt)
 	hear      func() []int16 // the audio around the word, for "only when said on its own" (alone.go)
 	answer    func(word string, can func() bool, act func())
 	now       func() time.Time
@@ -251,7 +258,9 @@ func newCommand(d *Detect, k *commandKind) *command {
 		fire: func(data map[string]string) {
 			component.Fire.Emit(component.Event{Name: CommandEvent, Data: data})
 		},
-		answer: nearest.Get().Answer,
+		canOpen: func() bool { return voice.Get().CanAnswer(ownAssistant) },
+		open:    func(at time.Time) { voice.Get().WokeAt(ownAssistant, at) },
+		answer:  nearest.Get().Answer,
 		hear:   hearAround,
 		now:    time.Now,
 		after:  func(d time.Duration, f func()) { time.AfterFunc(d, f) },
@@ -808,7 +817,7 @@ func (c *command) heard() {
 		// claim it, and acts as it always has, with an event and nothing to ask.
 		can := c.reaches
 		if c.kind.own {
-			can = func() bool { return true } // every device can fire the event
+			can = c.canOpen
 		}
 		c.answer("command:"+c.kind.objectID, can, c.act)
 		return
@@ -844,11 +853,20 @@ func (c *command) act() {
 	c.tell()
 }
 
-// tell fires the event for the word heard, after what it does.
+// tell fires the event for the word heard, after what it does. A word of your own opens a turn instead.
 func (c *command) tell() {
 	k := c.kind
 	score := c.score()
 	word := c.saved().ID
+	if k.own {
+		if !c.canOpen() {
+			slog.Info(k.what+" ignored: no assistant to open a turn on", "word", word)
+			return
+		}
+		slog.Info(k.what+", opening a turn", "word", word, "score", score)
+		c.open(c.now().Add(-ownHistory))
+		return
+	}
 	data, doing := k.act(c)
 	attrs := []any{"word", word, "score", score}
 	for _, key := range []string{"volume", "asked"} {

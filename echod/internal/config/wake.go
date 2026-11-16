@@ -31,9 +31,10 @@ type Wake struct {
 	VolumeUp CommandWord `json:"volume_up,omitzero"`
 	NextSong CommandWord `json:"next_song,omitzero"`
 
-	// Own are command words of your own: each fires an event for Home Assistant to act on ("lights",
-	// "kitchen lights off"), with no wake word and no turn. Unlike the music words they listen at any
-	// time unless WhilePlaying is set.
+	// Own are command words of your own: each opens a turn on the first assistant with no wake word
+	// before it, and the turn sends the phrase itself ("lights on"), so the assistant hears the request
+	// in the words it was said in. Unlike the music words they listen at any time unless WhilePlaying is
+	// set.
 	Own [OwnCommandWords]CommandWord `json:"own_commands,omitzero"`
 
 	// OnHA is Home Assistant's own wake word engine, used beside the device's or in its place.

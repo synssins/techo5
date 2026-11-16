@@ -56,7 +56,7 @@ func TestAWordOfYourOwnCanWaitToBeAlone(t *testing.T) {
 		name  string
 		set   bool
 		audio []int16
-		fired int
+		opened int
 		heard int
 	}{
 		{"off", false, nil, 1, 0},
@@ -72,8 +72,8 @@ func TestAWordOfYourOwnCanWaitToBeAlone(t *testing.T) {
 		heard := 0
 		r.c.hear = func() []int16 { heard++; return c.audio }
 		r.c.heard()
-		if len(r.fired) != c.fired || heard != c.heard {
-			t.Errorf("%s: fired %d, listened on %d times; want %d and %d", c.name, len(r.fired), heard, c.fired, c.heard)
+		if len(r.opened) != c.opened || heard != c.heard {
+			t.Errorf("%s: opened %d turns, listened on %d times; want %d and %d", c.name, len(r.opened), heard, c.opened, c.heard)
 		}
 	}
 }
