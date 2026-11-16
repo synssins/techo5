@@ -163,6 +163,10 @@ type CommandWord struct {
 
 	// WhilePlaying has a word of your own listen only while music plays, as the music words always do.
 	WhilePlaying bool `json:"while_playing,omitempty"`
+
+	// Alone has a word of your own act only when it was said on its own, with quiet before and after
+	// it, so the same word inside a sentence or over a television does nothing.
+	Alone bool `json:"alone,omitempty"`
 }
 
 // OwnCommandWords is how many command words of your own a device has. Each is one more model on every
@@ -420,6 +424,10 @@ func (w OwnCommandWriter) Threshold(v float64) error {
 
 func (w OwnCommandWriter) WhilePlaying(v bool) error {
 	return w.st.Update(func(c *Config) { c.Wake.Own[w.i].WhilePlaying = v })
+}
+
+func (w OwnCommandWriter) Alone(v bool) error {
+	return w.st.Update(func(c *Config) { c.Wake.Own[w.i].Alone = v })
 }
 
 type WakeWriter struct {

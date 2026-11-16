@@ -18,6 +18,7 @@ import (
 	"github.com/HuskerMinion/techo5/echod/internal/feature/ring"
 	"github.com/HuskerMinion/techo5/echod/internal/feature/voice"
 	"github.com/HuskerMinion/techo5/echod/internal/feature/wakeword"
+	"github.com/HuskerMinion/techo5/echod/internal/hardware/mic"
 	"github.com/HuskerMinion/techo5/echod/internal/lib/safe"
 	"github.com/HuskerMinion/techo5/echod/internal/lib/wake"
 )
@@ -85,6 +86,7 @@ type commandKind struct {
 	// listens at any time unless set to listen only while music plays (whilePlaying).
 	own        bool
 	setPlaying func(bool) error
+	setAlone   func(bool) error
 }
 
 var (
@@ -132,6 +134,7 @@ func ownCommand(i int) *commandKind {
 		setID:        func(v string) error { return config.Set().OwnCommand(i).ID(v) },
 		setThreshold: func(v float64) error { return config.Set().OwnCommand(i).Threshold(v) },
 		setPlaying:   func(v bool) error { return config.Set().OwnCommand(i).WhilePlaying(v) },
+		setAlone:     func(v bool) error { return config.Set().OwnCommand(i).Alone(v) },
 		act: func(*command) (map[string]string, string) {
 			return map[string]string{"command": "word"}, "telling Home Assistant"
 		},
@@ -182,6 +185,7 @@ type command struct {
 	opts      *component.Options
 	threshold *esphome.Number
 	playOnly  *esphome.Switch // a word of your own's "only while music plays"; nil for the music words
+	alone     *esphome.Switch // a word of your own's "only when said on its own"; nil for the music words
 
 	// models is what the device has, the same library the wake words come from, and wakeWords the ids
 	// chosen or running as wake words. playing is whether the room's music is playing, muted whether the
@@ -200,6 +204,7 @@ type command struct {
 	reaches   func() bool
 	next      func()
 	fire      func(data map[string]string)
+	hear      func() []int16 // the audio around the word, for "only when said on its own" (alone.go)
 	answer    func(word string, can func() bool, act func())
 	now       func() time.Time
 	after     func(time.Duration, func())
@@ -246,6 +251,7 @@ func newCommand(d *Detect, k *commandKind) *command {
 			component.Fire.Emit(component.Event{Name: CommandEvent, Data: data})
 		},
 		answer: nearest.Get().Answer,
+		hear:   hearAround,
 		now:    time.Now,
 		after:  func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}
@@ -318,8 +324,47 @@ func newCommand(d *Detect, k *commandKind) *command {
 			slog.Info("setting changed", "setting", c.playOnly.ObjectID, "using", on)
 			c.nudge()
 		}
+		c.alone = &esphome.Switch{
+			Base: esphome.Base{
+				ObjectID: k.objectID + "_alone",
+				DeviceID: component.DeviceMicrophone,
+				Name:     k.name + " only when said on its own",
+				Icon:     "mdi:account-voice-off",
+				Category: esphome.CategoryConfig,
+			},
+		}
+		c.alone.OnCommand = func(on bool) {
+			if err := k.setAlone(on); err != nil {
+				slog.Error("saving the "+k.what+" setting failed", "err", err)
+				return
+			}
+			c.alone.Set(on)
+			slog.Info("setting changed", "setting", c.alone.ObjectID, "using", on)
+		}
 	}
 	return c
+}
+
+// hearAround is the audio around a word just heard: what the microphones kept from before it, and
+// aloneAfter more, live.
+func hearAround() []int16 {
+	frames, audio, unlisten := mic.Get().ListenHistory("command word", aloneBefore)
+	defer unlisten()
+	want := int(aloneAfter.Seconds() * mic.Rate)
+	timeout := time.After(aloneAfter + time.Second)
+	for got := 0; got < want; {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				return audio
+			}
+			audio = append(audio, f...)
+			got += len(f)
+		case <-timeout:
+			return audio
+		}
+	}
+	return audio
 }
 
 // always reports whether the word listens and acts with no music playing: a word of your own, unless it
@@ -639,6 +684,9 @@ func (c *command) restore(w config.CommandWord) {
 	if c.playOnly != nil {
 		c.playOnly.Set(w.WhilePlaying)
 	}
+	if c.alone != nil {
+		c.alone.Set(w.Alone)
+	}
 	slog.Info("restored", "what", c.word.ObjectID, "using", c.phraseFor(w.ID), "threshold", w.ThresholdAt())
 }
 
@@ -775,6 +823,23 @@ func (c *command) act() {
 		slog.Info(k.what + " ignored: no music to be heard")
 		return
 	}
+	if k.own && c.saved().Alone {
+		// Listening on takes aloneAfter, which is not for whoever called this to wait out.
+		goAlone(k.what, func() {
+			if ok, why := spokenAlone(c.hear()); !ok {
+				slog.Info(k.what+" ignored: not said on its own", "why", why)
+				return
+			}
+			c.tell()
+		})
+		return
+	}
+	c.tell()
+}
+
+// tell fires the event for the word heard, after what it does.
+func (c *command) tell() {
+	k := c.kind
 	score := c.score()
 	word := c.saved().ID
 	data, doing := k.act(c)

@@ -100,7 +100,7 @@ func (d *Detect) Entities() []esphome.Entity {
 	for _, c := range d.commands {
 		out = append(out, c.word, c.threshold)
 		if c.playOnly != nil {
-			out = append(out, c.playOnly)
+			out = append(out, c.playOnly, c.alone)
 		}
 	}
 	out = append(out, d.frames.busy, d.frames.rate, d.frames.worst)
