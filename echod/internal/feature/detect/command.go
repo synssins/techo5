@@ -144,8 +144,8 @@ func ownCommand(i int) *commandKind {
 		setThreshold: func(v float64) error { return config.Set().OwnCommand(i).Threshold(v) },
 		setPlaying:   func(v bool) error { return config.Set().OwnCommand(i).WhilePlaying(v) },
 		setAlone:     func(v bool) error { return config.Set().OwnCommand(i).Alone(v) },
-		shared: true,
-		own:    true,
+		shared:       true,
+		own:          true,
 	}
 }
 
@@ -210,9 +210,9 @@ type command struct {
 	reaches   func() bool
 	next      func()
 	fire      func(data map[string]string)
-	canOpen   func() bool         // whether a turn on the first assistant can open here (voice.CanAnswer)
-	open      func(at time.Time)  // opens one, sending the audio from at (voice.WokeAt)
-	hear      func() []int16 // the audio around the word, for "only when said on its own" (alone.go)
+	canOpen   func() bool        // whether a turn on the first assistant can open here (voice.CanAnswer)
+	open      func(at time.Time) // opens one, sending the audio from at (voice.WokeAt)
+	hear      func() []int16     // the audio around the word, for "only when said on its own" (alone.go)
 	answer    func(word string, can func() bool, act func())
 	now       func() time.Time
 	after     func(time.Duration, func())
@@ -261,9 +261,9 @@ func newCommand(d *Detect, k *commandKind) *command {
 		canOpen: func() bool { return voice.Get().CanAnswer(ownAssistant) },
 		open:    func(at time.Time) { voice.Get().WokeAt(ownAssistant, at) },
 		answer:  nearest.Get().Answer,
-		hear:   hearAround,
-		now:    time.Now,
-		after:  func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+		hear:    hearAround,
+		now:     time.Now,
+		after:   func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}
 	c.word = &esphome.Select{
 		Base: esphome.Base{
@@ -864,6 +864,7 @@ func (c *command) tell() {
 			return
 		}
 		slog.Info(k.what+", opening a turn", "word", word, "score", score)
+		c.d.contest.ownOpened()
 		c.open(c.now().Add(-ownHistory))
 		return
 	}

@@ -1256,6 +1256,9 @@ func TestAnOwnCommandWordOpensATurn(t *testing.T) {
 	if len(r.fired) != 0 || r.skipped != 0 || len(r.adjusted) != 0 {
 		t.Errorf("fired %v, skipped %d, adjusted %v: a word of your own only opens a turn", r.fired, r.skipped, r.adjusted)
 	}
+	if r.c.d.contest.ownAt.IsZero() {
+		t.Error("the contest was not told, so a wake word crossing on the same words could interrupt the turn")
+	}
 	for _, c := range []struct {
 		name string
 		set  func(*commandRig)

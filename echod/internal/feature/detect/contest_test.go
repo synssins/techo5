@@ -113,3 +113,22 @@ func TestContestCommandWordAlone(t *testing.T) {
 		t.Fatal("the command word was refused")
 	}
 }
+
+// A wake word that crosses while a command word of your own's turn is young is the same thing said: it
+// opens nothing, held or not. After the window a wake word opens its turn as before.
+func TestContestWakeWordAfterAnOwnCommandTurn(t *testing.T) {
+	r := newContestRig()
+	r.c.ownOpened()
+	r.clock = r.clock.Add(1700 * time.Millisecond)
+	r.wake(0.9, false)
+	r.wake(0.9, true)
+	r.fire()
+	if len(r.opened) != 0 {
+		t.Fatalf("opened %v within the window", r.opened)
+	}
+	r.clock = r.clock.Add(ownTurnWindow)
+	r.wake(0.9, false)
+	if len(r.opened) != 1 {
+		t.Fatalf("opened %v after the window, want one turn", r.opened)
+	}
+}

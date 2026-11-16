@@ -15,6 +15,12 @@ import (
 // word waits for a command word while music plays, so it is kept short.
 const contestWindow = Hold + 100*time.Millisecond
 
+// ownTurnWindow is how long after a command word of your own opens its turn a wake word is taken to be
+// part of the same thing said. That turn already holds the phrase and what follows it; a wake word model
+// that crosses late on the same words ("Alexa" on "lights on") would otherwise interrupt it once it is
+// thinking, as a deliberate wake word does, and Home Assistant refuses the second run as a duplicate.
+const ownTurnWindow = 3 * time.Second
+
 // contest settles a wake word and a command word that both crossed on one thing said (#265). "Next song"
 // can cross a wake word over its cutoff, and the wake word opening a turn took the music's quiet and
 // left the command ignored. The one that crossed by more over its own cutoff wins. Not the higher score:
@@ -34,6 +40,9 @@ type contest struct {
 	wake      *heldWake
 	cmdAt     time.Time
 	cmdMargin float64
+
+	// ownAt is when a command word of your own last opened a turn.
+	ownAt time.Time
 
 	// now and after are the clock, nil for the real one; tests stand in.
 	now   func() time.Time
@@ -71,6 +80,11 @@ func (c *contest) wakeHeard(margin float64, hold bool) (gate func(open func()), 
 	if !c.cmdAt.IsZero() && now.Sub(c.cmdAt) < contestWindow && c.cmdMargin > margin {
 		c.mu.Unlock()
 		slog.Info("wake word ignored: the command word was heard more surely", "margin", margin, "theirs", c.cmdMargin)
+		return nil, false
+	}
+	if !c.ownAt.IsZero() && now.Sub(c.ownAt) < ownTurnWindow {
+		c.mu.Unlock()
+		slog.Info("wake word ignored: part of what opened a command word's turn", "after", now.Sub(c.ownAt))
 		return nil, false
 	}
 	if !hold {
@@ -116,6 +130,13 @@ func (c *contest) commandCrossed(margin float64) bool {
 	}
 	c.cmdAt, c.cmdMargin = now, margin
 	return true
+}
+
+// ownOpened is a command word of your own opening its turn.
+func (c *contest) ownOpened() {
+	c.mu.Lock()
+	c.ownAt = c.clock()
+	c.mu.Unlock()
 }
 
 // wakeHeard is a wake word the engine heard in slot (routeTurn).

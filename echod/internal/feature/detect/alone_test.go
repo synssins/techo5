@@ -53,11 +53,11 @@ func TestAWordOfYourOwnCanWaitToBeAlone(t *testing.T) {
 	t.Cleanup(func() { goAlone = safe.Go })
 	config.Use(filepath.Join(t.TempDir(), "state.json"))
 	for _, c := range []struct {
-		name  string
-		set   bool
-		audio []int16
+		name   string
+		set    bool
+		audio  []int16
 		opened int
-		heard int
+		heard  int
 	}{
 		{"off", false, nil, 1, 0},
 		{"on, said alone", true, sound(50, 50, 50, 50, 3000, 3200, 60, 50, 50), 1, 1},
