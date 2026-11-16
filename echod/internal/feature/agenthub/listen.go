@@ -44,14 +44,14 @@ const (
 	// onsetWindows how many in a row: one loud window is a door or a cough.
 	onsetDB      = 12.0
 	onsetWindows = 2
-	// longest is AgentHub's own limit on one utterance.
-	longest = 30 * time.Second
+	// longest is the most one utterance sends; AgentHub takes up to 30 s and 2 MB.
+	longest = 20 * time.Second
 	// afterSound is how long the room is left alone after the device's own sound ends: its tail is still
 	// in the room, and AgentHub would only throw it away as echo.
 	afterSound = 700 * time.Millisecond
 	// replyFor is how long a reply is waited for before giving up on it.
 	replyFor = 2 * time.Minute
-	// servedFor is how long a reply's audio stays at its address for a player elsewhere to fetch.
+	// servedFor is how long a reply's address answers, for the player to start fetching it.
 	servedFor = 3 * time.Minute
 	// fullScale is the int16 full scale the microphone frames are narrowed to (mic.Floor's).
 	fullScale = 32768.0
@@ -72,20 +72,33 @@ type loop struct {
 	soundEnded atomic.Int64
 	playing    atomic.Bool
 
+	// refused is the key turned away by a send running on its own: the session ends on it.
+	refused atomic.Bool
+
 	mu     sync.Mutex
 	stop   func() // stops the reply playing now, nil when none is
-	served map[string]reply
+	served map[string]*relay
 }
 
-type reply struct {
-	body  []byte
-	ctype string
+// relay is a reply passed on from AgentHub as it arrives, at an address of this device's own: the player
+// (this device's own, or one elsewhere) cannot send AgentHub's key.
+type relay struct {
+	a     config.AgentHub
+	path  string
 	until time.Time
+
+	// first is when its audio began going out, and rate and bytes what went: the length of what was
+	// played, for a player elsewhere that cannot be heard finishing. done closes once it is all sent.
+	mu    sync.Mutex
+	first time.Time
+	rate  int
+	bytes int
+	done  chan struct{}
 }
 
 func newLoop(report func(string)) *loop {
 	l := &loop{report: report, kick: make(chan struct{}, 1), client: &http.Client{Timeout: 40 * time.Second},
-		served: map[string]reply{}}
+		served: map[string]*relay{}}
 	web.Handle(servePath, "", l.serving, l.serve)
 	return l
 }
@@ -114,7 +127,7 @@ func (l *loop) run(ctx context.Context) error {
 		default:
 			sctx, cancel := context.WithCancel(ctx)
 			done := make(chan error, 1)
-			safe.Go("agenthub listen", func() { done <- l.session(sctx, a) })
+			safe.Go("agenthub listen", func() { done <- l.session(sctx, cancel, a) })
 			select {
 			case <-ctx.Done():
 				cancel()
@@ -142,8 +155,9 @@ func (l *loop) run(ctx context.Context) error {
 	}
 }
 
-// session listens until ctx ends or the key is refused.
-func (l *loop) session(ctx context.Context, a config.AgentHub) error {
+// session listens until ctx ends or the key is refused (cancel, from a send).
+func (l *loop) session(ctx context.Context, cancel context.CancelFunc, a config.AgentHub) error {
+	l.refused.Store(false)
 	frames, _, unlisten := mic.Get().ListenHistory("agenthub", 0)
 	defer unlisten()
 	l.report("listening")
@@ -162,6 +176,9 @@ func (l *loop) session(ctx context.Context, a config.AgentHub) error {
 		var frame []int16
 		select {
 		case <-ctx.Done():
+			if l.refused.Load() {
+				return errRefused
+			}
 			return nil
 		case frame = <-frames:
 		}
@@ -179,9 +196,13 @@ func (l *loop) session(ctx context.Context, a config.AgentHub) error {
 				}
 				utterance := seg[:min(end, len(seg))]
 				seg, det, loud = nil, nil, 0
-				if err := l.send(ctx, a, utterance); errors.Is(err, errRefused) {
-					return err
-				}
+				// On a goroutine of its own, so the room goes on being heard while it uploads.
+				safe.Go("agenthub send", func() {
+					if errors.Is(l.send(ctx, a, utterance), errRefused) {
+						l.refused.Store(true)
+						cancel()
+					}
+				})
 			}
 			continue
 		}
@@ -245,7 +266,8 @@ func (l *loop) send(ctx context.Context, a config.AgentHub, pcm []int16) error {
 	case status == http.StatusUnauthorized:
 		return errRefused
 	case err != nil:
-		slog.Warn("agenthub: sending what was heard failed", "err", err)
+		slog.Warn("agenthub: sending what was heard failed", "err", err,
+			"seconds", float64(len(pcm))/mic.Rate, "bytes", 44+2*len(pcm))
 		l.report("server unreachable")
 		// A short wait, so a server that is down is not asked again at every word.
 		select {
@@ -304,27 +326,16 @@ func (l *loop) answer(ctx context.Context, a config.AgentHub, after int64) {
 		slog.Warn("agenthub: the reply has no audio", "message", r.MessageID)
 		return
 	}
-	body, ctype, err := l.fetch(ctx, a, r.AudioURL)
-	if err != nil {
-		slog.Warn("agenthub: fetching the reply's audio failed", "err", err)
-		return
-	}
-	if l.play(ctx, body, ctype) {
+	if l.play(ctx, a, r.AudioURL) {
 		if _, err := l.call(ctx, a, http.MethodPost, "/api/device/played", "", nil, nil); err != nil {
 			slog.Warn("agenthub: saying the reply was played failed", "err", err)
 		}
 	}
 }
 
-// play plays a reply here, or on the player replies play on (config.Brain.ReplyPlayer), and reports
-// whether it was heard to the end.
-func (l *loop) play(ctx context.Context, body []byte, ctype string) bool {
-	samples, err := media.Decode(body, ctype, "agenthub reply")
-	if err != nil {
-		slog.Warn("agenthub: the reply's audio could not be read", "err", err)
-		return false
-	}
-	length := time.Duration(len(samples)) * time.Second / speaker.VoiceRate
+// play plays a reply as it arrives, here or on the player replies play on (config.Brain.ReplyPlayer),
+// and reports whether it was heard to the end.
+func (l *loop) play(ctx context.Context, a config.AgentHub, path string) bool {
 	l.playing.Store(true)
 	defer func() {
 		l.soundEnded.Store(time.Now().UnixNano())
@@ -332,37 +343,32 @@ func (l *loop) play(ctx context.Context, body []byte, ctype string) bool {
 	}()
 
 	if player := config.Get().Brain.ReplyPlayer; player != "" {
-		if u, ok := l.offer(body, ctype); ok {
-			if err := hass.Get().Call("media_player", "play_media", map[string]any{
+		if u, r, ok := l.offer(a, path, ownIP()); ok {
+			err := hass.Get().Call("media_player", "play_media", map[string]any{
 				"entity_id": player, "media_content_id": u, "media_content_type": "music", "announce": true,
-			}); err == nil {
+			})
+			if err == nil {
 				pctx, cancel := context.WithCancel(ctx)
+				defer cancel()
 				l.setStop(func() {
 					cancel()
 					_ = hass.Get().Call("media_player", "media_stop", map[string]any{"entity_id": player})
 				})
 				defer l.setStop(nil)
-				// The device cannot hear another speaker finish: the reply's length and a moment for it to
-				// start, as the voice feature's own replies elsewhere are waited for.
-				t := time.NewTimer(length + 2*time.Second)
-				defer t.Stop()
-				select {
-				case <-t.C:
-					return true
-				case <-pctx.Done():
-					return false
-				}
-			} else {
-				slog.Warn("agenthub: the player did not take the reply, playing it here", "player", player, "err", err)
+				return r.heardElsewhere(pctx)
 			}
+			slog.Warn("agenthub: the player did not take the reply, playing it here", "player", player, "err", err)
 		}
 	}
 
+	u, _, ok := l.offer(a, path, "127.0.0.1")
+	if !ok {
+		return false
+	}
 	media.Get().Sounding(true)
 	defer media.Get().Sounding(false)
-	claim := speaker.Sound().ClaimSpeech("agenthub", func(_ context.Context, p *speaker.Player) error {
-		p.PlayVoice(samples)
-		return nil
+	claim := speaker.Sound().ClaimSpeech("agenthub", func(cctx context.Context, p *speaker.Player) error {
+		return media.PlaySpeech(cctx, u, &media.SpeechStream{Buffer: media.AnnounceBuffer, Gain: true}, p)
 	})
 	l.setStop(func() {
 		if speaker.Sound().Holder() == "agenthub" {
@@ -373,6 +379,34 @@ func (l *loop) play(ctx context.Context, body []byte, ctype string) bool {
 	select {
 	case <-claim.Done():
 		return !claim.Stopped() && claim.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// heardElsewhere waits until a reply on a player elsewhere should have been heard: the device cannot
+// hear another speaker finish, so it is the length of what went out, from when it began, and a moment
+// for the player to start, as the voice feature's own replies elsewhere are waited for.
+func (r *relay) heardElsewhere(ctx context.Context) bool {
+	select {
+	case <-r.done:
+	case <-ctx.Done():
+		return false
+	case <-time.After(servedFor):
+		return false
+	}
+	r.mu.Lock()
+	first, rate, n := r.first, r.rate, r.bytes
+	r.mu.Unlock()
+	if rate == 0 {
+		rate = speaker.VoiceRate
+	}
+	length := time.Duration(n) * time.Second / time.Duration(rate*2)
+	t := time.NewTimer(time.Until(first.Add(length + 2*time.Second)))
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
 	case <-ctx.Done():
 		return false
 	}
@@ -395,27 +429,27 @@ func (l *loop) stopReply() {
 	}
 }
 
-// offer serves a reply at an address of this device's own for the player elsewhere to fetch, which
-// cannot send AgentHub's key: a random one, gone after servedFor.
-func (l *loop) offer(body []byte, ctype string) (string, bool) {
-	ip := ownIP()
-	if ip == "" {
-		return "", false
+// offer gives a reply an address on this device, at host, that relays it from AgentHub with the key: a
+// random one, answering once, within servedFor.
+func (l *loop) offer(a config.AgentHub, path, host string) (string, *relay, bool) {
+	if host == "" {
+		return "", nil, false
 	}
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "", false
+		return "", nil, false
 	}
 	tok := hex.EncodeToString(b)
+	r := &relay{a: a, path: path, until: time.Now().Add(servedFor), done: make(chan struct{})}
 	l.mu.Lock()
-	for k, r := range l.served {
-		if time.Now().After(r.until) {
+	for k, old := range l.served {
+		if time.Now().After(old.until) {
 			delete(l.served, k)
 		}
 	}
-	l.served[tok] = reply{body: body, ctype: ctype, until: time.Now().Add(servedFor)}
+	l.served[tok] = r
 	l.mu.Unlock()
-	return "http://" + net.JoinHostPort(ip, strconv.Itoa(web.Port)) + servePath + "?t=" + tok, true
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(web.Port)) + servePath + "?t=" + tok, r, true
 }
 
 func (l *loop) serving() bool {
@@ -424,17 +458,69 @@ func (l *loop) serving() bool {
 	return len(l.served) > 0
 }
 
-func (l *loop) serve(w http.ResponseWriter, r *http.Request) {
+// serve relays a reply from AgentHub as it arrives. The address is used up by the fetch.
+func (l *loop) serve(w http.ResponseWriter, req *http.Request) {
+	tok := req.URL.Query().Get("t")
 	l.mu.Lock()
-	rep, ok := l.served[r.URL.Query().Get("t")]
+	r, ok := l.served[tok]
+	delete(l.served, tok)
 	l.mu.Unlock()
-	if !ok || time.Now().After(rep.until) {
-		http.NotFound(w, r)
+	if !ok || time.Now().After(r.until) {
+		http.NotFound(w, req)
 		return
 	}
-	w.Header().Set("Content-Type", rep.ctype)
-	w.Header().Set("Content-Length", strconv.Itoa(len(rep.body)))
-	_, _ = w.Write(rep.body)
+	defer close(r.done)
+	up, err := http.NewRequestWithContext(req.Context(), http.MethodGet, r.a.URL+r.path, nil)
+	if err != nil {
+		http.Error(w, "bad reply address", http.StatusBadGateway)
+		return
+	}
+	up.Header.Set("Authorization", "Bearer "+r.a.Key)
+	resp, err := (&http.Client{}).Do(up) // no timeout: a reply is spoken for as long as it takes
+	if err != nil {
+		slog.Warn("agenthub: fetching the reply's audio failed", "err", err)
+		http.Error(w, "reply unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		slog.Warn("agenthub: fetching the reply's audio failed", "status", resp.Status)
+		http.Error(w, "reply unavailable", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.Header().Set("Cache-Control", "no-store")
+	flush, _ := w.(http.Flusher)
+	buf := make([]byte, 8192)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			r.sent(buf[:n])
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if flush != nil {
+				flush.Flush()
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// sent counts what went out, reading the sample rate from a WAV header at the front.
+func (r *relay) sent(p []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.first.IsZero() {
+		r.first = time.Now()
+		if len(p) >= 28 && string(p[0:4]) == "RIFF" {
+			r.rate = int(binary.LittleEndian.Uint32(p[24:28]))
+			r.bytes -= 44
+		}
+	}
+	r.bytes += len(p)
 }
 
 // ownIP is the device's address on its Wi-Fi.
@@ -479,25 +565,6 @@ func (l *loop) call(ctx context.Context, a config.AgentHub, method, path, ctype 
 		return resp.StatusCode, nil
 	}
 	return resp.StatusCode, json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
-}
-
-// fetch gets a reply's audio, which needs the key as every call does.
-func (l *loop) fetch(ctx context.Context, a config.AgentHub, path string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL+path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.Key)
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("%s: %s", path, resp.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	return body, resp.Header.Get("Content-Type"), err
 }
 
 // wav is mono 16-bit PCM at the microphone's rate in a WAV file.

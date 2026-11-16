@@ -75,12 +75,6 @@ func Fetch(ctx context.Context, url string) ([]int16, error) {
 	return decode(body, resp.Header.Get("Content-Type"), url)
 }
 
-// Decode is a whole body of WAV or MP3 as mono speech at speaker.VoiceRate, for audio fetched some other
-// way than Fetch (one that needs a key). source names it in errors.
-func Decode(body []byte, contentType, source string) ([]int16, error) {
-	return decode(body, contentType, source)
-}
-
 // decode is a whole body as mono speech at speaker.VoiceRate. url is only for the errors and the log.
 func decode(body []byte, contentType, url string) ([]int16, error) {
 	var (

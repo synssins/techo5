@@ -2,6 +2,8 @@ package agenthub
 
 import (
 	"encoding/binary"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -68,8 +70,57 @@ func TestKeys(t *testing.T) {
 	if config.Get().AgentHub.Key != "" {
 		t.Fatal("an empty key did not remove it")
 	}
+	f.replies.OnCommand("media_player.office_ceiling")
+	if config.Get().Brain.ReplyPlayer != "media_player.office_ceiling" {
+		t.Fatal("replies play on was not saved")
+	}
+	f.replies.OnCommand("not a player")
+	if config.Get().Brain.ReplyPlayer != "media_player.office_ceiling" {
+		t.Fatal("a value that is not a media player replaced it")
+	}
 	f.brainKey.OnCommand("k2")
 	if config.Get().Brain.Key != "k2" {
 		t.Fatal("the chat model key was not saved")
+	}
+}
+
+// A reply's address relays it from AgentHub with the key, as it comes, counts what went (for a player
+// elsewhere, which cannot be heard finishing), and answers once.
+func TestRelay(t *testing.T) {
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer k" || r.URL.Path != "/api/device/audio/9" {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		hdr := wav(nil)
+		binary.LittleEndian.PutUint32(hdr[24:], 24000)
+		_, _ = w.Write(hdr)
+		_, _ = w.Write(make([]byte, 48000)) // one second at 24 kHz
+	}))
+	defer hub.Close()
+	l := &loop{served: map[string]*relay{}}
+	u, r, ok := l.offer(config.AgentHub{URL: hub.URL, Key: "k"}, "/api/device/audio/9", "127.0.0.1")
+	if !ok || !l.serving() {
+		t.Fatal("nothing offered")
+	}
+	req := httptest.NewRequest(http.MethodGet, u, nil)
+	rec := httptest.NewRecorder()
+	l.serve(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "audio/wav" || rec.Body.Len() != 44+48000 {
+		t.Fatalf("relayed %d %q %d bytes", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
+	}
+	select {
+	case <-r.done:
+	default:
+		t.Fatal("not done after the whole reply went")
+	}
+	if r.rate != 24000 || r.bytes != 48000 {
+		t.Fatalf("counted rate %d, %d bytes", r.rate, r.bytes)
+	}
+	rec = httptest.NewRecorder()
+	l.serve(rec, httptest.NewRequest(http.MethodGet, u, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("answered twice: %d", rec.Code)
 	}
 }

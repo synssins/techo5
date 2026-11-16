@@ -40,6 +40,7 @@ type Feature struct {
 	llm      *esphome.Text
 	model    *esphome.Text
 	brainKey *esphome.Text
+	replies  *esphome.Text
 
 	listen *esphome.Switch
 	hubURL *esphome.Text
@@ -71,6 +72,7 @@ func newFeature() *Feature {
 		llm:      text("brain_llm", "Chat model address", "mdi:server-network", 255),
 		model:    text("brain_model", "Chat model name", "mdi:tag-text", 100),
 		brainKey: secret("brain_key", "Chat model key"),
+		replies:  text("replies_play_on", "Replies play on", "mdi:speaker-wireless", 255),
 		listen:   &esphome.Switch{Base: cfg("agenthub_listen", "Listen without a wake word", "mdi:ear-hearing")},
 		hubURL:   text("agenthub_url", "AgentHub address", "mdi:server-network", 255),
 		hubKey:   secret("agenthub_key", "AgentHub device key"),
@@ -88,6 +90,12 @@ func newFeature() *Feature {
 	}
 	f.brainKey.OnCommand = func(v string) {
 		f.setKey(f.brainKey, v, config.Get().Brain.Key, config.Set().Brain().SetKey)
+	}
+	f.replies.OnCommand = func(v string) {
+		if err := config.Set().Brain().SetReplyPlayer(v); err != nil {
+			slog.Warn("agenthub: replies play on", "err", err)
+		}
+		f.replies.Set(config.Get().Brain.ReplyPlayer)
 	}
 	f.listen.OnCommand = func(on bool) {
 		if err := config.Set().AgentHub().On(on); err != nil {
@@ -114,7 +122,7 @@ func newFeature() *Feature {
 func (f *Feature) Name() string { return "agenthub" }
 
 func (f *Feature) Entities() []esphome.Entity {
-	return []esphome.Entity{f.brain, f.stt, f.tts, f.llm, f.model, f.brainKey, f.listen, f.hubURL, f.hubKey, f.status}
+	return []esphome.Entity{f.brain, f.stt, f.tts, f.llm, f.model, f.brainKey, f.replies, f.listen, f.hubURL, f.hubKey, f.status}
 }
 
 // Restore shows the saved settings, keys only as saved or not.
@@ -126,6 +134,7 @@ func (f *Feature) Restore(c config.Config) {
 	f.llm.Set(b.LLM)
 	f.model.Set(b.Model)
 	f.brainKey.Set(masked(b.Key))
+	f.replies.Set(b.ReplyPlayer)
 	f.listen.Set(c.AgentHub.On)
 	f.hubURL.Set(c.AgentHub.URL)
 	f.hubKey.Set(masked(c.AgentHub.Key))

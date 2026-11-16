@@ -372,6 +372,7 @@ var registered = []string{
 	"brain_llm",
 	"brain_model",
 	"brain_key",
+	"replies_play_on",
 	"agenthub_listen",
 	"agenthub_url",
 	"agenthub_key",
