@@ -39,6 +39,7 @@ type commandRig struct {
 	skipped   int
 	fired     []map[string]string
 	opened    []time.Time
+	ended     time.Time
 	cannot    bool
 	wakeWords []string
 	models    []wake.Model
@@ -82,6 +83,7 @@ func (r *commandRig) newWord(k *commandKind) *command {
 		reaches: func() bool { return r.reaches },
 		next:    func() { r.skipped++ },
 		fire:    func(data map[string]string) { r.fired = append(r.fired, data) },
+		endedAt: func() time.Time { return r.ended },
 		canOpen: func() bool { return !r.cannot },
 		open:    func(at time.Time) { r.opened = append(r.opened, at) },
 		now:     func() time.Time { return r.clock },
@@ -1266,6 +1268,7 @@ func TestAnOwnCommandWordOpensATurn(t *testing.T) {
 		{"a turn", func(r *commandRig) { r.busy = true }},
 		{"a ring", func(r *commandRig) { r.ringing = true }},
 		{"no assistant", func(r *commandRig) { r.cannot = true }},
+		{"a reply still playing", func(r *commandRig) { r.ended = r.clock.Add(-ownAfterTurn + time.Second) }},
 	} {
 		r := newCommandRig(t).as(ownCommand(2))
 		r.models = append(r.models, model("lights", wake.KindMicroWakeWord))
@@ -1288,5 +1291,17 @@ func TestAnOwnCommandWordAsksWhoIsNearest(t *testing.T) {
 	r.c.heard()
 	if asked != "command:command_word_1" || !could {
 		t.Fatalf("asked %q (can %v), want command:command_word_1 and true", asked, could)
+	}
+}
+
+// Once the allowance after a turn has passed, a command word of your own opens a turn again.
+func TestAnOwnCommandWordAfterAReply(t *testing.T) {
+	r := newCommandRig(t).as(ownCommand(0))
+	r.models = append(r.models, model("lights", wake.KindMicroWakeWord))
+	r.choose(t, "lights")
+	r.ended = r.clock.Add(-ownAfterTurn)
+	r.c.heard()
+	if len(r.opened) != 1 {
+		t.Fatalf("opened %v, want one turn once the reply has had its time", r.opened)
 	}
 }

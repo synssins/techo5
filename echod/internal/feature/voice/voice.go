@@ -318,6 +318,10 @@ func (v *Voice) open(slot int, woke bool, at time.Time) {
 // is.
 func (v *Voice) Busy() bool { return v.turn.Busy() }
 
+// TurnEndedAt is when the last turn ended, zero before the first, for anything that has to let its
+// reply be heard out.
+func (v *Voice) TurnEndedAt() time.Time { return v.turn.EndedAt() }
+
 // Cancel stops a turn that is running, for a gesture that turned out to mean something else: the
 // second tap of a double, the way a long hold already undoes the turn its hold began.
 func (v *Voice) Cancel() {

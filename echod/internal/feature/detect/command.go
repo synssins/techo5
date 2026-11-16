@@ -58,6 +58,15 @@ const ownAssistant = 0
 // history, which holds the phrase (detection fires at its end) and what led up to it.
 const ownHistory = mic.Confirming - mic.History
 
+// ownAfterTurn is how long after a turn ends a command word of your own rests. The reply is said in the
+// room then, on this device or on a player Home Assistant chose, which the device cannot hear finish,
+// and a reply often says the phrase back ("Turned off the lights"): heard, it would open a turn of its
+// own and do it again.
+//
+// shortcut: a fixed allowance, not the reply's length; a reply longer than this that says the phrase
+// near its end can still be heard. Upgrade by resting until the reply's player is idle.
+const ownAfterTurn = 5 * time.Second
+
 // CommandEvent is what Home Assistant's bus calls a command word acting, so an automation, or a client
 // that is not Home Assistant, can follow what the device did on its own.
 const CommandEvent = "esphome.techo5_command"
@@ -210,6 +219,7 @@ type command struct {
 	reaches   func() bool
 	next      func()
 	fire      func(data map[string]string)
+	endedAt   func() time.Time   // when the last turn ended (voice.TurnEndedAt)
 	canOpen   func() bool        // whether a turn on the first assistant can open here (voice.CanAnswer)
 	open      func(at time.Time) // opens one, sending the audio from at (voice.WokeAt)
 	hear      func() []int16     // the audio around the word, for "only when said on its own" (alone.go)
@@ -258,6 +268,7 @@ func newCommand(d *Detect, k *commandKind) *command {
 		fire: func(data map[string]string) {
 			component.Fire.Emit(component.Event{Name: CommandEvent, Data: data})
 		},
+		endedAt: func() time.Time { return voice.Get().TurnEndedAt() },
 		canOpen: func() bool { return voice.Get().CanAnswer(ownAssistant) },
 		open:    func(at time.Time) { voice.Get().WokeAt(ownAssistant, at) },
 		answer:  nearest.Get().Answer,
@@ -837,6 +848,9 @@ func (c *command) act() {
 		return
 	case !c.always() && (!c.playing() || c.muted()):
 		slog.Info(k.what + " ignored: no music to be heard")
+		return
+	case k.own && c.endedAt != nil && c.now().Sub(c.endedAt()) < ownAfterTurn:
+		slog.Info(k.what + " ignored: a reply may still be playing")
 		return
 	}
 	if k.own && c.saved().Alone {

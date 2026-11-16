@@ -202,6 +202,10 @@ type conversation struct {
 	// between starting and canceling, and posting either is safe whichever it picks.
 	visible atomic.Int32
 
+	// endedAt is when the last turn ended, in Unix nanoseconds, zero before the first: its reply may still
+	// be in the room, here or on a player Home Assistant chose, which the device cannot hear finish.
+	endedAt atomic.Int64
+
 	// Below here belongs to the run goroutine alone.
 	phase phase
 
@@ -1314,6 +1318,7 @@ func (c *conversation) idle(why string, how activity.Ending) {
 			c.send("stop", c.be.Stop)
 		}
 		c.stoppedAt = c.now()
+		c.endedAt.Store(c.stoppedAt.UnixNano())
 	}
 
 	kept := recording.Get()
@@ -1587,6 +1592,14 @@ func (c *conversation) Cancel() { c.post(event{kind: evCancel}) }
 
 // Busy reports whether there is anything to cancel.
 func (c *conversation) Busy() bool { return c.Phase() != phaseIdle }
+
+// EndedAt is when the last turn ended, zero before the first.
+func (c *conversation) EndedAt() time.Time {
+	if n := c.endedAt.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
+}
 
 // audioSettings asks Home Assistant to condition the microphone audio before recognition. The
 // array's analog gain already matches what the vendor's own recognizer ran with, and speech still
