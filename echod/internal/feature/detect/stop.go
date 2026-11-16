@@ -99,6 +99,9 @@ func (d *Detect) Entities() []esphome.Entity {
 	out := []esphome.Entity{d.stop, d.hangup.word, d.hangup.threshold}
 	for _, c := range d.commands {
 		out = append(out, c.word, c.threshold)
+		if c.playOnly != nil {
+			out = append(out, c.playOnly)
+		}
 	}
 	out = append(out, d.frames.busy, d.frames.rate, d.frames.worst)
 	return append(out, d.score, d.onHA.stream, d.onHA.confirm, d.onHA.threshold, d.onHA.faint, d.clipsTotal, d.clipsKinds,

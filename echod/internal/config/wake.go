@@ -31,6 +31,11 @@ type Wake struct {
 	VolumeUp CommandWord `json:"volume_up,omitzero"`
 	NextSong CommandWord `json:"next_song,omitzero"`
 
+	// Own are command words of your own: each fires an event for Home Assistant to act on ("lights",
+	// "kitchen lights off"), with no wake word and no turn. Unlike the music words they listen at any
+	// time unless WhilePlaying is set.
+	Own [OwnCommandWords]CommandWord `json:"own_commands,omitzero"`
+
 	// OnHA is Home Assistant's own wake word engine, used beside the device's or in its place.
 	OnHA OnHA `json:"on_ha,omitempty"`
 
@@ -155,7 +160,14 @@ type CommandWord struct {
 	// Threshold is the score it has to reach. Zero is DefaultCommandThreshold, and at StopOff the word
 	// is not listened for, as with the stop word.
 	Threshold float64 `json:"threshold,omitempty"`
+
+	// WhilePlaying has a word of your own listen only while music plays, as the music words always do.
+	WhilePlaying bool `json:"while_playing,omitempty"`
 }
+
+// OwnCommandWords is how many command words of your own a device has. Each is one more model on every
+// frame while it listens.
+const OwnCommandWords = 6
 
 // DefaultCommandThreshold is higher than a wake word's. A command word is short, it is said over the
 // music it acts on, and it acts at once: there is no turn after it to show that it was a mistake.
@@ -164,10 +176,11 @@ const DefaultCommandThreshold = 0.90
 // On reports whether a word is chosen and can be heard at all.
 func (w CommandWord) On() bool { return w.ID != "" && w.ThresholdAt() < StopOff }
 
-// CommandWords are the command words in the order their slots are in: volume down, volume up, next song.
-// What keeps their models on the device (a purge, the setup page's remove) goes by this list.
+// CommandWords are the command words in the order their slots are in: volume down, volume up, next song,
+// then your own. What keeps their models on the device (a purge, the setup page's remove) goes by this
+// list.
 func (w Wake) CommandWords() []CommandWord {
-	return []CommandWord{w.VolumeDown, w.VolumeUp, w.NextSong}
+	return append([]CommandWord{w.VolumeDown, w.VolumeUp, w.NextSong}, w.Own[:]...)
 }
 
 // ThresholdAt is the score the word has to reach.
@@ -389,6 +402,24 @@ func (w NextSongWriter) ID(v string) error {
 
 func (w NextSongWriter) Threshold(v float64) error {
 	return w.st.Update(func(c *Config) { c.Wake.NextSong.Threshold = v })
+}
+
+// OwnCommandWriter is one command word of your own, which belongs to no slot either.
+type OwnCommandWriter struct {
+	st *Store
+	i  int
+}
+
+func (w OwnCommandWriter) ID(v string) error {
+	return w.st.Update(func(c *Config) { c.Wake.Own[w.i].ID = v })
+}
+
+func (w OwnCommandWriter) Threshold(v float64) error {
+	return w.st.Update(func(c *Config) { c.Wake.Own[w.i].Threshold = v })
+}
+
+func (w OwnCommandWriter) WhilePlaying(v bool) error {
+	return w.st.Update(func(c *Config) { c.Wake.Own[w.i].WhilePlaying = v })
 }
 
 type WakeWriter struct {

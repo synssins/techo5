@@ -39,8 +39,11 @@ const (
 	// NextSongSlot is the next song word's.
 	NextSongSlot = CommandSlot + 2
 
+	// OwnCommandSlot is the first command word of your own's; the others follow it.
+	OwnCommandSlot = NextSongSlot + 1
+
 	// lastCommandSlot is the highest slot a command word listens in, the last the engine is sized for.
-	lastCommandSlot = NextSongSlot
+	lastCommandSlot = OwnCommandSlot + config.OwnCommandWords - 1
 )
 
 // commandNone is a command word's select switched off.
@@ -77,6 +80,11 @@ type commandKind struct {
 	// shared is a word that every device in a Music Assistant group hears and that would act once on
 	// each of them: only the nearest device acts (feature/nearest). The volume words are per device.
 	shared bool
+
+	// own is a command word of your own: it only fires the event, for Home Assistant to act on, and it
+	// listens at any time unless set to listen only while music plays (whilePlaying).
+	own        bool
+	setPlaying func(bool) error
 }
 
 var (
@@ -111,9 +119,36 @@ var (
 	}
 )
 
+// ownCommand is command word of your own i, from 0: heard, it fires the event with command "word" and
+// does nothing else, so Home Assistant decides what "lights" means in the room it was said in. Every
+// device that hears it would fire, so only the nearest does (shared), the way the next song word skips
+// once.
+func ownCommand(i int) *commandKind {
+	n := strconv.Itoa(i + 1)
+	return &commandKind{
+		slot: OwnCommandSlot + i, what: "command word " + n,
+		objectID: "command_word_" + n, name: "Command word " + n, icon: "mdi:account-voice",
+		saved:        func(w config.Wake) config.CommandWord { return w.Own[i] },
+		setID:        func(v string) error { return config.Set().OwnCommand(i).ID(v) },
+		setThreshold: func(v float64) error { return config.Set().OwnCommand(i).Threshold(v) },
+		setPlaying:   func(v bool) error { return config.Set().OwnCommand(i).WhilePlaying(v) },
+		act: func(*command) (map[string]string, string) {
+			return map[string]string{"command": "word"}, "telling Home Assistant"
+		},
+		shared: true,
+		own:    true,
+	}
+}
+
 // commandKinds are the command words in slot order, which is also the order a model chosen for more than
 // one of them is given to: it listens only as the first (wanted).
-var commandKinds = []*commandKind{volumeDown, volumeUp, nextSong}
+var commandKinds = func() []*commandKind {
+	out := []*commandKind{volumeDown, volumeUp, nextSong}
+	for i := range config.OwnCommandWords {
+		out = append(out, ownCommand(i))
+	}
+	return out
+}()
 
 // isCommandSlot reports whether a slot is one of the command words'.
 func isCommandSlot(slot int) bool { return slot >= CommandSlot && slot <= lastCommandSlot }
@@ -146,6 +181,7 @@ type command struct {
 	word      *esphome.Select
 	opts      *component.Options
 	threshold *esphome.Number
+	playOnly  *esphome.Switch // a word of your own's "only while music plays"; nil for the music words
 
 	// models is what the device has, the same library the wake words come from, and wakeWords the ids
 	// chosen or running as wake words. playing is whether the room's music is playing, muted whether the
@@ -263,8 +299,32 @@ func newCommand(d *Detect, k *commandKind) *command {
 		// that shares this one's model listens only while this one doesn't.
 		c.followAll()
 	}
+	if k.own {
+		c.playOnly = &esphome.Switch{
+			Base: esphome.Base{
+				ObjectID: k.objectID + "_while_playing",
+				DeviceID: component.DeviceMicrophone,
+				Name:     k.name + " only while music plays",
+				Icon:     "mdi:music-note",
+				Category: esphome.CategoryConfig,
+			},
+		}
+		c.playOnly.OnCommand = func(on bool) {
+			if err := k.setPlaying(on); err != nil {
+				slog.Error("saving the "+k.what+" setting failed", "err", err)
+				return
+			}
+			c.playOnly.Set(on)
+			slog.Info("setting changed", "setting", c.playOnly.ObjectID, "using", on)
+			c.nudge()
+		}
+	}
 	return c
 }
+
+// always reports whether the word listens and acts with no music playing: a word of your own, unless it
+// is set to listen only while music plays.
+func (c *command) always() bool { return c.kind.own && !c.saved().WhilePlaying }
 
 // saved is this word's choice as the config holds it.
 func (c *command) saved() config.CommandWord { return c.kind.saved(config.Get().Wake) }
@@ -576,6 +636,9 @@ func (c *command) restore(w config.CommandWord) {
 	c.opts.Restore(c.options())
 	c.word.Set(c.phraseFor(w.ID))
 	c.threshold.Set(float32(w.ThresholdAt()))
+	if c.playOnly != nil {
+		c.playOnly.Set(w.WhilePlaying)
+	}
 	slog.Info("restored", "what", c.word.ObjectID, "using", c.phraseFor(w.ID), "threshold", w.ThresholdAt())
 }
 
@@ -620,7 +683,8 @@ func (c *command) follow() {
 	}
 	have, loaded := c.d.engine.Loaded(slot)
 
-	now, playing := c.now(), c.playing()
+	// A word that listens at any time is treated as if music always played: in, and never resting.
+	now, playing := c.now(), c.playing() || c.always()
 	switch {
 	case playing:
 		c.quietSince = time.Time{}
@@ -687,7 +751,11 @@ func (c *command) heard() {
 		// One utterance is heard by every device in the group, and each would skip: the nearest asks the
 		// others and only the best one goes on. A device that could not skip anyway (reaches) does not
 		// claim it, and acts as it always has, with an event and nothing to ask.
-		c.answer("command:"+c.kind.objectID, c.reaches, c.act)
+		can := c.reaches
+		if c.kind.own {
+			can = func() bool { return true } // every device can fire the event
+		}
+		c.answer("command:"+c.kind.objectID, can, c.act)
 		return
 	}
 	c.act()
@@ -703,7 +771,7 @@ func (c *command) act() {
 	case c.ringing():
 		slog.Info(k.what + " ignored: an alarm or timer is ringing")
 		return
-	case !c.playing() || c.muted():
+	case !c.always() && (!c.playing() || c.muted()):
 		slog.Info(k.what + " ignored: no music to be heard")
 		return
 	}

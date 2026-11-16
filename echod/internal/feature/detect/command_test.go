@@ -737,6 +737,10 @@ func TestEachCommandWordHasItsOwnSlot(t *testing.T) {
 	r.models = append(r.models, model("turn_it_up", wake.KindMicroWakeWord), model("next_song", wake.KindMicroWakeWord))
 	r.playing = true
 	words := map[*commandKind]string{volumeDown: "turn_it_down", volumeUp: "turn_it_up", nextSong: "next_song"}
+	for _, k := range commandKinds[3:] {
+		words[k] = k.objectID
+		r.models = append(r.models, model(k.objectID, wake.KindMicroWakeWord))
+	}
 	var all []*command
 	for _, k := range commandKinds {
 		all = append(all, r.newWord(k))
@@ -756,7 +760,7 @@ func TestEachCommandWordHasItsOwnSlot(t *testing.T) {
 		}
 	}
 	if !isCommandSlot(CommandSlot) || !isCommandSlot(VolumeUpSlot) || !isCommandSlot(NextSongSlot) ||
-		isCommandSlot(HangupSlot) || isCommandSlot(StopSlot) || isCommandSlot(NextSongSlot+1) {
+		isCommandSlot(HangupSlot) || isCommandSlot(StopSlot) || isCommandSlot(lastCommandSlot+1) {
 		t.Error("isCommandSlot does not match the command words' slots")
 	}
 	for _, k := range commandKinds {
@@ -863,7 +867,7 @@ func TestCommandWordsAreReachedByTheirSlot(t *testing.T) {
 			t.Errorf("commandAt(%d) is not the %s", k.slot, k.what)
 		}
 	}
-	if d.commandAt(StopSlot) != nil || d.commandAt(NextSongSlot+1) != nil || d.commandAt(0) != nil {
+	if d.commandAt(StopSlot) != nil || d.commandAt(lastCommandSlot+1) != nil || d.commandAt(0) != nil {
 		t.Error("a slot that isn't a command word's has one")
 	}
 	if err := config.Set().VolumeUp().ID("turn_it_up"); err != nil {
@@ -1199,5 +1203,86 @@ func TestOnlyTheNextSongWordAsksTheNearestDevice(t *testing.T) {
 	r.c.heard()
 	if len(asked) != 1 || len(r.adjusted) != 1 {
 		t.Fatalf("the volume word asked %v, adjusted %v: it is per device", asked, r.adjusted)
+	}
+}
+
+// A command word of your own listens with nothing playing, and stays in: it is for the house, not the
+// music. Set to listen only while music plays, it rests like the music words do.
+func TestAnOwnCommandWordListensAtAnyTime(t *testing.T) {
+	r := newCommandRig(t).as(ownCommand(0))
+	r.models = append(r.models, model("lights", wake.KindMicroWakeWord))
+	r.choose(t, "lights")
+	r.c.follow()
+	if got := r.loaded(); got != "lights" {
+		t.Fatalf("with no music, loaded %q, want lights", got)
+	}
+	if len(r.timers) != 0 {
+		t.Fatalf("set %d timers for a word that never rests", len(r.timers))
+	}
+
+	if err := config.Set().OwnCommand(0).WhilePlaying(true); err != nil {
+		t.Fatal(err)
+	}
+	r.c.follow()
+	r.clock = r.clock.Add(commandHold)
+	r.fireTimers()
+	if got := r.loaded(); got != "" {
+		t.Fatalf("set to listen only while music plays, loaded %q with none playing", got)
+	}
+	r.playing = true
+	r.c.follow()
+	if got := r.loaded(); got != "lights" {
+		t.Fatalf("with music, loaded %q, want lights", got)
+	}
+}
+
+// Heard, a command word of your own fires the event and nothing else, with nothing playing and the
+// speaker muted too: Home Assistant decides what it does. A turn or a ring still has the microphones.
+func TestAnOwnCommandWordOnlyTellsHomeAssistant(t *testing.T) {
+	r := newCommandRig(t).as(ownCommand(2))
+	r.models = append(r.models, model("lights", wake.KindMicroWakeWord))
+	r.choose(t, "lights")
+	r.muted = true
+	r.c.heard()
+	if len(r.fired) != 1 {
+		t.Fatalf("fired %v, want one event", r.fired)
+	}
+	want := map[string]string{"command": "word", "word": "lights", "score": "0.93"}
+	for k, v := range want {
+		if r.fired[0][k] != v {
+			t.Errorf("event %s = %q, want %q (%v)", k, r.fired[0][k], v, r.fired[0])
+		}
+	}
+	if r.skipped != 0 || len(r.adjusted) != 0 {
+		t.Errorf("skipped %d, adjusted %v: a word of your own only fires the event", r.skipped, r.adjusted)
+	}
+	for _, c := range []struct {
+		name string
+		set  func(*commandRig)
+	}{
+		{"a turn", func(r *commandRig) { r.busy = true }},
+		{"a ring", func(r *commandRig) { r.ringing = true }},
+	} {
+		r := newCommandRig(t).as(ownCommand(2))
+		r.models = append(r.models, model("lights", wake.KindMicroWakeWord))
+		r.choose(t, "lights")
+		c.set(r)
+		r.c.heard()
+		if len(r.fired) != 0 {
+			t.Errorf("%s: fired %v", c.name, r.fired)
+		}
+	}
+}
+
+// Every device that hears a word of your own would fire, and "lights" would toggle twice: only the
+// nearest acts, and every device can (it has nobody to ask, unlike the next song word).
+func TestAnOwnCommandWordAsksWhoIsNearest(t *testing.T) {
+	r := newCommandRig(t).as(ownCommand(0))
+	var asked string
+	var could bool
+	r.c.answer = func(word string, can func() bool, act func()) { asked, could = word, can() }
+	r.c.heard()
+	if asked != "command:command_word_1" || !could {
+		t.Fatalf("asked %q (can %v), want command:command_word_1 and true", asked, could)
 	}
 }

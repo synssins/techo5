@@ -157,6 +157,9 @@ func (w Writer) VolumeUp() VolumeUpWriter { return VolumeUpWriter(w) }
 // NextSong is the next song word, which is not a slot either.
 func (w Writer) NextSong() NextSongWriter { return NextSongWriter(w) }
 
+// OwnCommand is command word of your own i, from 0, which is not a slot either.
+func (w Writer) OwnCommand(i int) OwnCommandWriter { return OwnCommandWriter{st: w.st, i: i} }
+
 // OnHA is Home Assistant's wake word engine.
 func (w Writer) OnHA() OnHAWriter { return OnHAWriter(w) }
 
