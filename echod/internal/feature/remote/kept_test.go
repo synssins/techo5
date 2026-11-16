@@ -16,6 +16,9 @@ type keptSetting struct {
 // keptByRestore is every read-only entity backed by a setting, which a restored file must never turn
 // on either: what this API may not change, a settings file may not change behind it.
 var keptByRestore = map[string]keptSetting{
+	"agenthub_listen":                  {func(c *config.Config) { c.AgentHub.On = true }, func(c config.Config) bool { return c.AgentHub.On }},
+	"agenthub_url":                     {func(c *config.Config) { c.AgentHub.URL = "http://192.168.1.86:8787" }, func(c config.Config) bool { return c.AgentHub.URL != "" }},
+	"agenthub_key":                     {func(c *config.Config) { c.AgentHub.Key = "k" }, func(c config.Config) bool { return c.AgentHub.Key != "" }},
 	"remote_api":                       {func(c *config.Config) { c.Remote.On = true }, func(c config.Config) bool { return c.Remote.On }},
 	"ssh":                              {func(c *config.Config) { c.Security.SSH = true }, func(c config.Config) bool { return c.Security.SSH }},
 	"camera_web_access":                {func(c *config.Config) { c.Security.Camera = true }, func(c config.Config) bool { return c.Security.Camera }},

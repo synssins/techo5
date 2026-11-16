@@ -366,6 +366,16 @@ var registered = []string{
 	"calendar_next_up_within",
 	"calendar_weather",
 	"calendar_week_starts_monday",
+	"brain",
+	"brain_stt",
+	"brain_tts",
+	"brain_llm",
+	"brain_model",
+	"brain_key",
+	"agenthub_listen",
+	"agenthub_url",
+	"agenthub_key",
+	"agenthub_status",
 }
 
 func TestEveryComponentStillRegisters(t *testing.T) {

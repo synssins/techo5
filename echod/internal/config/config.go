@@ -58,6 +58,7 @@ type Config struct {
 	CamStream      CamStream      `json:"cam_stream,omitempty"`
 	Share          Share          `json:"share,omitempty"`
 	Realtime       Realtime       `json:"realtime,omitempty"`
+	AgentHub       AgentHub       `json:"agenthub,omitzero"`
 	Tessera        Tessera        `json:"tessera,omitempty"`
 	WifiQuiet      WifiQuiet      `json:"wifi_quiet,omitempty"`
 	WifiBand       WifiBand       `json:"wifi_band,omitempty"`
@@ -121,6 +122,7 @@ func (w Writer) Dashboard() DashboardWriter           { return DashboardWriter(w
 func (w Writer) Calendar() CalendarWriter             { return CalendarWriter(w) }
 func (w Writer) Todo() TodoWriter                     { return TodoWriter(w) }
 func (w Writer) Brain() BrainWriter                   { return BrainWriter(w) }
+func (w Writer) AgentHub() AgentHubWriter             { return AgentHubWriter(w) }
 func (w Writer) TalkBack() TalkBackWriter             { return TalkBackWriter(w) }
 func (w Writer) Doorbell() DoorbellWriter             { return DoorbellWriter(w) }
 func (w Writer) Streaming() StreamingWriter           { return StreamingWriter(w) }

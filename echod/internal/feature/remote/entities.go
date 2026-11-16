@@ -21,6 +21,8 @@ var readOnly = []string{
 	"remote_api", "ssh", "setup_page", "camera_web_access", "screen_web_access", "remote_adb", "insecure_tls",
 	"airplay", "airplay_2", "spotify_connect", "dlna", "dlna_video", "video", "sendspin", "bluetooth_proxy",
 	"bluetooth_proxy_connections", "snapcast", "snapcast_server",
+	// Listening without a wake word sends the room's speech to a server (agenthub).
+	"agenthub_listen", "agenthub_url", "agenthub_key",
 	// Off the network for hours: a caller could take the device out of its own reach (Wi-Fi quiet hours).
 	"wifi_quiet_hours", "wifi_quiet_hours_start", "wifi_quiet_hours_end",
 	// Listening, watching and keeping.

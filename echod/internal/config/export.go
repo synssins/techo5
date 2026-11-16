@@ -280,6 +280,7 @@ func jsonName(f reflect.StructField) string {
 // ClearSecrets empties every secret in c.
 func ClearSecrets(c *Config) {
 	c.Brain.Key = ""
+	c.AgentHub.Key = ""
 	c.Dashboard.Key = ""
 	c.MusicAssistant.Token = ""
 	c.Home.HouseWord = ""
@@ -441,6 +442,9 @@ func KeepOwn(c *Config, from Config) {
 	// Where this device's replies play is the speaker next to it, not the one next to the device the
 	// file came from.
 	c.Brain.ReplyPlayer = from.Brain.ReplyPlayer
+	// Listening without a wake word sends the room's speech to a server: this device's to turn on, with
+	// its own key.
+	c.AgentHub = from.AgentHub
 	// So are the to-do lists it shows: the kitchen's shopping list, a desk's chores.
 	c.Todo = from.Todo
 
