@@ -223,7 +223,7 @@ func (v *Voice) Run(ctx context.Context) error {
 // Ready reports whether Home Assistant has a voice pipeline listening. Wake detection runs before
 // that happens, but nothing can be done with a detection until it does, so this is what the device
 // shows on the ring while it comes up.
-func (v *Voice) Ready() bool { return v.vs.Subscribed() || config.Get().Brain.Direct() }
+func (v *Voice) Ready() bool { return v.vs.Subscribed() || config.Get().Brain.Direct() || hubReady() }
 
 // HomeAssistant reports whether Home Assistant itself has a voice pipeline listening, whatever the
 // brain. Ready is always true with a direct brain, so it says nothing about whether Home Assistant
@@ -281,7 +281,7 @@ func (v *Voice) CanAnswer(slot int) bool {
 	if !v.Ready() {
 		return false
 	}
-	if config.Get().Brain.Direct() {
+	if config.Get().Brain.Direct() || hubReady() {
 		return true
 	}
 	return slot >= 0 && slot < len(v.ActiveWakeWords())

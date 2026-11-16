@@ -53,6 +53,22 @@ func TestTheChatModelNeedsAllThree(t *testing.T) {
 	}
 }
 
+// AgentHub can be chosen to answer only once its address and device key are set.
+func TestTheBrainCanBeAgentHub(t *testing.T) {
+	config.Use(filepath.Join(t.TempDir(), "state.json"))
+	f := newFeature()
+	f.brain.OnCommand(brainHub)
+	if config.Get().Brain.Mode != config.BrainHomeAssistant {
+		t.Fatal("chosen with no address or key")
+	}
+	f.hubURL.OnCommand("http://192.168.1.86:8787")
+	f.hubKey.OnCommand("k")
+	f.brain.OnCommand(brainHub)
+	if config.Get().Brain.Mode != config.BrainAgentHub {
+		t.Fatal("not chosen with an address and key")
+	}
+}
+
 // A key typed in Home Assistant is saved; sending back what the text shows for it keeps it, and an
 // empty one removes it.
 func TestKeys(t *testing.T) {

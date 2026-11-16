@@ -158,6 +158,8 @@ type conversation struct {
 	// running against (backend.go). be is chosen as a turn opens and is only the loop's to change.
 	ha     ha
 	direct *direct
+	// hub answers through AgentHub when it is chosen (hub.go).
+	hub *hub
 	// realtime answers a slot chosen for realtime voice (realtime.go).
 	realtime *rtBackend
 	be       backend
@@ -400,6 +402,7 @@ func newConversation(vs *esphome.VoiceSatellite) *conversation {
 	}
 	c.ha = ha{vs: vs, watch: c.startWatch}
 	c.direct = newDirect(c.post)
+	c.hub = newHub(c.post)
 	c.realtime = newRealtime(c.postSure)
 	c.be = c.ha
 
@@ -739,8 +742,10 @@ func (c *conversation) turnEvent(e event) {
 		if c.phase == phaseIdle {
 			return
 		}
-		// A player chosen for replies needs the url, whatever the slot's setting is.
-		if wakeword.Delivery(c.slot) == config.DeliveryStream && replyPlayer() == "" {
+		// A player chosen for replies needs the url, whatever the slot's setting is, and so does
+		// AgentHub, which sends nothing but the url.
+		_, fromHub := c.be.(*hub)
+		if wakeword.Delivery(c.slot) == config.DeliveryStream && replyPlayer() == "" && !fromHub {
 			return
 		}
 		// Already playing as it is written; without the offer (an agent that does not stream), it is

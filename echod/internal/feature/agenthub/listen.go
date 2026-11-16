@@ -297,30 +297,9 @@ type replyAnswer struct {
 
 // answer waits for the agent's reply to message after, plays it, and says so.
 func (l *loop) answer(ctx context.Context, a config.AgentHub, after int64) {
-	deadline := time.Now().Add(replyFor)
-	var r replyAnswer
-	for {
-		if ctx.Err() != nil || time.Now().After(deadline) {
-			slog.Warn("agenthub: no reply came", "after", after)
-			return
-		}
-		r = replyAnswer{}
-		q := "/api/device/reply?after=" + strconv.FormatInt(after, 10) + "&wait=25"
-		status, err := l.call(ctx, a, http.MethodGet, q, "", nil, &r)
-		if status == http.StatusUnauthorized {
-			return
-		}
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * time.Second):
-			}
-			continue
-		}
-		if r.Text != nil {
-			break
-		}
+	r, ok := l.waitReply(ctx, a, after)
+	if !ok {
+		return
 	}
 	if r.AudioURL == "" {
 		slog.Warn("agenthub: the reply has no audio", "message", r.MessageID)
@@ -331,6 +310,66 @@ func (l *loop) answer(ctx context.Context, a config.AgentHub, after int64) {
 			slog.Warn("agenthub: saying the reply was played failed", "err", err)
 		}
 	}
+}
+
+// waitReply asks for the reply to message after until one comes or replyFor has passed.
+func (l *loop) waitReply(ctx context.Context, a config.AgentHub, after int64) (replyAnswer, bool) {
+	deadline := time.Now().Add(replyFor)
+	for {
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			slog.Warn("agenthub: no reply came", "after", after)
+			return replyAnswer{}, false
+		}
+		var r replyAnswer
+		q := "/api/device/reply?after=" + strconv.FormatInt(after, 10) + "&wait=25"
+		status, err := l.call(ctx, a, http.MethodGet, q, "", nil, &r)
+		if status == http.StatusUnauthorized {
+			return replyAnswer{}, false
+		}
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return replyAnswer{}, false
+			case <-time.After(2 * time.Second):
+			}
+			continue
+		}
+		if r.Text != nil {
+			return r, true
+		}
+	}
+}
+
+// turn answers a turn the device opened itself (its wake word or a command word), for the voice
+// feature's AgentHub backend: sent as direct, so AgentHub skips its name check and its agent answers
+// without thinking. The reply's address is this device's relay at its own address, which a player
+// elsewhere can fetch too.
+func (l *loop) turn(ctx context.Context, pcm []int16) (string, string, error) {
+	a := config.Get().AgentHub
+	var ans listenAnswer
+	status, err := l.call(ctx, a, http.MethodPost, "/api/device/listen?direct=1", "audio/wav", wav(pcm), &ans)
+	switch {
+	case status == http.StatusUnauthorized:
+		l.report("key refused")
+		return "", "", errRefused
+	case err != nil:
+		return "", "", err
+	case !ans.Accepted:
+		return "", "", nil
+	}
+	r, ok := l.waitReply(ctx, a, ans.MessageID)
+	if !ok {
+		return "", "", errors.New("no reply came")
+	}
+	if r.AudioURL == "" {
+		return *r.Text, "", nil
+	}
+	host := ownIP()
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	u, _, _ := l.offer(a, r.AudioURL, host)
+	return *r.Text, u, nil
 }
 
 // play plays a reply as it arrives, here or on the player replies play on (config.Brain.ReplyPlayer),

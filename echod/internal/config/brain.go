@@ -76,6 +76,8 @@ type BrainMode string
 const (
 	BrainHomeAssistant BrainMode = ""
 	BrainDirect        BrainMode = "direct"
+	// BrainAgentHub sends a turn to an AgentHub server's agent (config.AgentHub, feature/voice/hub.go).
+	BrainAgentHub BrainMode = "agenthub"
 )
 
 // Direct is whether turns go to the direct pipeline, and it is set up enough to run one.

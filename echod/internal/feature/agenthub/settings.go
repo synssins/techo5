@@ -17,6 +17,7 @@ import (
 
 	"github.com/HuskerMinion/techo5/echod/internal/component"
 	"github.com/HuskerMinion/techo5/echod/internal/config"
+	"github.com/HuskerMinion/techo5/echod/internal/feature/voice"
 )
 
 func init() {
@@ -26,6 +27,7 @@ func init() {
 const (
 	brainHA     = "Home Assistant"
 	brainDirect = "Chat model"
+	brainHub    = "AgentHub"
 
 	// keySet is what a key's text shows once one is saved: the key itself never goes back to Home
 	// Assistant, where it would sit in the state history.
@@ -66,7 +68,7 @@ func newFeature() *Feature {
 		return &esphome.Text{Base: cfg(id, name, "mdi:key"), MaxLength: 255, Mode: esphome.TextPassword}
 	}
 	f := &Feature{
-		brain:    &esphome.Select{Base: cfg("brain", "Answered by", "mdi:head-cog"), Options: []string{brainHA, brainDirect}},
+		brain:    &esphome.Select{Base: cfg("brain", "Answered by", "mdi:head-cog"), Options: []string{brainHA, brainDirect, brainHub}},
 		stt:      text("brain_stt", "Chat model speech to text", "mdi:microphone-message", 100),
 		tts:      text("brain_tts", "Chat model text to speech", "mdi:account-voice", 100),
 		llm:      text("brain_llm", "Chat model address", "mdi:server-network", 255),
@@ -80,6 +82,7 @@ func newFeature() *Feature {
 			Icon: "mdi:ear-hearing", Category: esphome.CategoryDiagnostic}},
 	}
 	f.loop = newLoop(f.status.Set)
+	voice.SetHubTurn(f.loop.turn)
 
 	f.brain.OnCommand = f.setBrain
 	f.stt.OnCommand = func(v string) { f.setHostPort(f.stt, v, func(b *config.Brain) *string { return &b.STT }) }
@@ -142,8 +145,11 @@ func (f *Feature) Restore(c config.Config) {
 }
 
 func brainOption(m config.BrainMode) string {
-	if m == config.BrainDirect {
+	switch m {
+	case config.BrainDirect:
 		return brainDirect
+	case config.BrainAgentHub:
+		return brainHub
 	}
 	return brainHA
 }
@@ -170,6 +176,13 @@ func (f *Feature) setBrain(opt string) {
 			f.brain.Set(brainOption(config.Get().Brain.Mode))
 			return
 		}
+	case brainHub:
+		if a := config.Get().AgentHub; a.URL == "" || a.Key == "" {
+			slog.Warn("agenthub: answering through AgentHub needs its address and device key set first")
+			f.brain.Set(brainOption(config.Get().Brain.Mode))
+			return
+		}
+		b.Mode = config.BrainAgentHub
 	default:
 		return
 	}

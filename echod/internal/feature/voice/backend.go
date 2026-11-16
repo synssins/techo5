@@ -64,6 +64,9 @@ func (c *conversation) backendFor(slot int) backend {
 	if w := config.Get().Wake.Words; slot >= 0 && slot < len(w) && w[slot].Realtime {
 		return c.realtime
 	}
+	if hubReady() {
+		return c.hub
+	}
 	if config.Get().Brain.Direct() {
 		return c.direct
 	}
@@ -80,7 +83,7 @@ func (c *conversation) onHA() bool {
 // it: the device's own, not Home Assistant's run.
 func (c *conversation) stopsAtOnce() bool {
 	switch c.be.(type) {
-	case *direct, *rtBackend:
+	case *direct, *rtBackend, *hub:
 		return true
 	}
 	return false
