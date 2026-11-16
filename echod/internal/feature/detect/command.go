@@ -220,7 +220,7 @@ type command struct {
 	next      func()
 	fire      func(data map[string]string)
 	endedAt   func() time.Time   // when the last turn ended (voice.TurnEndedAt)
-	canOpen   func() bool        // whether a turn on the first assistant can open here (voice.CanAnswer)
+	canOpen   func() bool        // whether a turn on the first assistant can open here (voice.CanStart)
 	open      func(at time.Time) // opens one, sending the audio from at (voice.WokeAt)
 	hear      func() []int16     // the audio around the word, for "only when said on its own" (alone.go)
 	answer    func(word string, can func() bool, act func())
@@ -269,7 +269,7 @@ func newCommand(d *Detect, k *commandKind) *command {
 			component.Fire.Emit(component.Event{Name: CommandEvent, Data: data})
 		},
 		endedAt: func() time.Time { return voice.Get().TurnEndedAt() },
-		canOpen: func() bool { return voice.Get().CanAnswer(ownAssistant) },
+		canOpen: func() bool { return voice.Get().CanStart() },
 		open:    func(at time.Time) { voice.Get().WokeAt(ownAssistant, at) },
 		answer:  nearest.Get().Answer,
 		hear:    hearAround,

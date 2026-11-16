@@ -50,3 +50,22 @@ func TestCanAnswerARealtimeSlot(t *testing.T) {
 		t.Error("realtime voice ready, and the device says it cannot answer without Home Assistant")
 	}
 }
+
+// With no wake word chosen, a turn can still be started on the first assistant once Home Assistant is
+// listening, as the action button starts one; with a wake word, it is CanAnswer's answer.
+func TestCanStartWithNoWakeWord(t *testing.T) {
+	config.Use(filepath.Join(t.TempDir(), "state.json"))
+	vs := &esphome.VoiceSatellite{}
+	v := &Voice{vs: vs, turn: newConversation(vs)}
+	if v.CanStart() {
+		t.Error("with Home Assistant not listening, a turn can start")
+	}
+	subscribe(t, v, &esphome.Conn{})
+	if !v.CanStart() {
+		t.Error("with Home Assistant listening and no wake word, a turn cannot start")
+	}
+	vs.ActiveWakeWords = []string{"okay_nabu"}
+	if v.CanStart() != v.CanAnswer(0) {
+		t.Error("with a wake word, CanStart and CanAnswer disagree")
+	}
+}

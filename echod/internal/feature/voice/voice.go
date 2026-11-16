@@ -287,6 +287,18 @@ func (v *Voice) CanAnswer(slot int) bool {
 	return slot >= 0 && slot < len(v.ActiveWakeWords())
 }
 
+// CanStart is whether a turn on the first assistant would open here now with no wake word before it, as
+// the action button opens one: with a wake word in the first slot, as CanAnswer says; with none, when an
+// assistant is there and the microphones are the device's, since Home Assistant answers a turn that
+// reports no phrase with its first pipeline. Something that opens turns on its own, like a command word,
+// asks this rather than CanAnswer, so a device set to no wake word still answers it.
+func (v *Voice) CanStart() bool {
+	if len(v.ActiveWakeWords()) > 0 {
+		return v.CanAnswer(0)
+	}
+	return !micTaken() && v.Ready()
+}
+
 func (v *Voice) open(slot int, woke bool, at time.Time) {
 	if micTaken() {
 		slog.Info("wake word ignored: the microphones are taken", "by", heldBy())
