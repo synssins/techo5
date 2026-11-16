@@ -2,6 +2,7 @@ package detect
 
 import (
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 	"sync"
@@ -507,7 +508,13 @@ func (d *Detect) commandHeard(slot int) {
 	if c == nil {
 		return
 	}
-	if !d.contest.commandCrossed(d.engine.Margin(slot)) {
+	margin := d.engine.Margin(slot)
+	if c.kind.own {
+		// A phrase of your own that crosses at all is the more specific of the two: its model scores
+		// nothing on a wake word said, while a wake word can cross on the phrase ("lights" for "Alexa").
+		margin = math.Inf(1)
+	}
+	if !d.contest.commandCrossed(margin) {
 		slog.Info(c.kind.what + " ignored: the wake word was heard more surely")
 		return
 	}

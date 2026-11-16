@@ -1,8 +1,10 @@
 package detect
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/HuskerMinion/techo5/echod/internal/config"
 	"github.com/HuskerMinion/techo5/echod/internal/lib/endpoint"
@@ -73,5 +75,18 @@ func TestAWordOfYourOwnCanWaitToBeAlone(t *testing.T) {
 		if len(r.fired) != c.fired || heard != c.heard {
 			t.Errorf("%s: fired %d, listened on %d times; want %d and %d", c.name, len(r.fired), heard, c.fired, c.heard)
 		}
+	}
+}
+
+// A wake word that crosses on a phrase of your own ("Alexa" on "lights on") does not open a turn: the
+// phrase crossing at all wins, whatever the margins.
+func TestAPhraseOfYourOwnBeatsAWakeWordOnIt(t *testing.T) {
+	var c contest
+	c.now = time.Now
+	if _, ok := c.wakeHeard(0.5, true); !ok {
+		t.Fatal("the wake word was not heard")
+	}
+	if !c.commandCrossed(math.Inf(1)) {
+		t.Fatal("a phrase of your own lost to a wake word")
 	}
 }
