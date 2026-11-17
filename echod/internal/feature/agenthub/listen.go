@@ -220,7 +220,10 @@ func (l *loop) session(ctx context.Context, cancel context.CancelFunc, a config.
 			window = window[endpoint.Window:]
 			if loud >= onsetWindows {
 				seg = append([]int16(nil), pre...)
-				det = endpoint.New(endpoint.Default)
+				// The pause set on the device (End of speech pause), as a turn's: a window is a tenth of a second.
+				ends := endpoint.Default
+				ends.Quiet = config.Get().Microphone.EndPauseTenths()
+				det = endpoint.New(ends)
 				det.Feed(seg)
 				pre, window = pre[:0], window[:0]
 				break
